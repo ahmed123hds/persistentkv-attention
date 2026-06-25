@@ -1,0 +1,27 @@
+=== GQA Load Pattern Micro-Benchmark ===
+
+GQA config: Hq=32, Hkv=8, G=4, d=128
+
+N=  4096:
+  Baseline  :   1.285 ms |   52.2 GB/s effective | theoretical DRAM=67.1 MB
+  PersistKV :   1.749 ms |    9.6 GB/s effective | theoretical DRAM=16.8 MB
+  Speedup   : 0.73x  |  DRAM reduction target: 4.0x (G=4)
+  Peak BW utilization: baseline=14.5%, PersistKV=2.7%
+
+N=  8192:
+  Baseline  :   2.538 ms |   52.9 GB/s effective | theoretical DRAM=134.2 MB
+  PersistKV :   3.534 ms |    9.5 GB/s effective | theoretical DRAM=33.6 MB
+  Speedup   : 0.72x  |  DRAM reduction target: 4.0x (G=4)
+  Peak BW utilization: baseline=14.7%, PersistKV=2.6%
+
+N= 16384:
+  Baseline  :   5.125 ms |   52.4 GB/s effective | theoretical DRAM=268.4 MB
+  PersistKV :   7.241 ms |    9.3 GB/s effective | theoretical DRAM=67.1 MB
+  Speedup   : 0.71x  |  DRAM reduction target: 4.0x (G=4)
+  Peak BW utilization: baseline=14.5%, PersistKV=2.6%
+
+N= 32768:
+  Baseline  :  10.398 ms |   51.6 GB/s effective | theoretical DRAM=536.9 MB
+  PersistKV :  14.021 ms |    9.6 GB/s effective | theoretical DRAM=134.2 MB
+  Speedup   : 0.74x  |  DRAM reduction target: 4.0x (G=4)
+  Peak BW utilization: baseline=14.3%, PersistKV=2.7%

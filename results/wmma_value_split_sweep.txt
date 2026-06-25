@@ -1,0 +1,7 @@
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits= 1 | time= 0.611 ms | BW= 54.9 GB/s | efficiency=15% | baseline_dram=134.2MB pkv_dram=33.6MB
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits= 2 | time= 0.311 ms | BW=107.9 GB/s | efficiency=30% | baseline_dram=134.2MB pkv_dram=33.6MB
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits= 4 | time= 0.231 ms | BW=145.3 GB/s | efficiency=40% | baseline_dram=134.2MB pkv_dram=33.6MB
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits= 8 | time= 0.217 ms | BW=154.6 GB/s | efficiency=43% | baseline_dram=134.2MB pkv_dram=33.6MB
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.164 ms | BW=204.6 GB/s | efficiency=57% | baseline_dram=134.2MB pkv_dram=33.6MB
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=32 | time= 0.164 ms | BW=204.6 GB/s | efficiency=57% | baseline_dram=134.2MB pkv_dram=33.6MB
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=64 | time= 0.152 ms | BW=220.1 GB/s | efficiency=61% | baseline_dram=134.2MB pkv_dram=33.6MB

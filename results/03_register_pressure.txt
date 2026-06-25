@@ -1,0 +1,10 @@
+=== Register Pressure vs Occupancy (G=1,2,4,8) ===
+RTX 3060: 28 SMs, 65536 regs/SM, 1536 threads/SM max
+
+G=1: 5.776 ms  | max_active_blocks/SM=3  | occupancy=25%
+G=2: 8.216 ms  | max_active_blocks/SM=3  | occupancy=25%
+G=4: 13.209 ms  | max_active_blocks/SM=3  | occupancy=25%
+G=8: 23.211 ms  | max_active_blocks/SM=3  | occupancy=25%
+
+Note: compile with -Xptxas -v to see register counts per kernel variant.
+Register spills -> local memory -> HBM traffic: bad for bandwidth-bound kernels.

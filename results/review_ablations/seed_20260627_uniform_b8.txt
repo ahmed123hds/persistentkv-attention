@@ -1,0 +1,46 @@
+Serving trace experiment
+torch=2.5.1+cu121 cuda=12.1 gpu=NVIDIA GeForce RTX 3060
+trace=uniform requests=24 max_active=8 measured_steps=48 repeats=1
+B active mean=8.00 max=8 exact_length_buckets mean=8.00 max=8
+PersistentKV bucket_tokens=0 route_buckets mean=8.00 max=8
+PersistentKV indexed_qo=False
+PersistentKV single_bucket=False
+PersistentKV adaptive_route=False
+PersistentKV workqueue=False
+PersistentKV cuda_graph=False
+PersistentKV fused_merge=False
+PersistentKV precompute_metadata=True
+PersistentKV auto_splits=False
+Hq=32 Hkv=8 G=4 d=128 page=16 hole_fraction=0.00 physical_pages=25555
+dynamic lengths grow by one token per active request per measured step
+correctness vs FlashInfer: max_abs=6.104e-05 mean_abs=3.053e-06 PASS
+
+| Engine | GPU tokens/s | GPU mean step ms | GPU p95 ms | GPU p99 ms | Wall tokens/s | Wall mean step ms | Wall p95 ms | Wall p99 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| FlashInfer ragged paged batch | 4632.0 | 1.727 | 2.560 | 2.662 | 4357.8 | 1.836 | 2.762 | 2.846 |
+| PersistentKV length buckets | 4597.7 | 1.740 | 1.881 | 1.884 | 4178.7 | 1.914 | 2.518 | 2.850 |
+| PersistentKV compact workqueue | 5120.7 | 1.562 | 1.717 | 1.732 | 4643.4 | 1.723 | 2.357 | 2.502 |
+| Adaptive routed engine | 5120.7 | 1.562 | 1.717 | 1.732 | 4643.4 | 1.723 | 2.357 | 2.502 |
+
+GPU speed ratio Adaptive/FlashInfer tokens/s: 1.106x
+Wall speed ratio Adaptive/FlashInfer tokens/s: 1.066x
+Adaptive route counts: flashinfer=0 persistentkv_bucket=0 persistentkv_workqueue=48
+total measured decode tokens=384
+
+Causal profile counters (occupancy and traffic are structural proxies, not Nsight hardware counters)
+| Engine | CUDA launches/step | Non-empty CTA fraction | Decode CTA work/SM | Useful KV read MB/step | Merge state MB/step | Merge launches/step | Python+scheduling ms/step |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| FlashInfer ragged paged batch | 1.00 | 1.000 | 0.0 | 447.2 | 0.00 | 0.00 | 0.109 |
+| PersistentKV length buckets | 16.00 | 1.000 | 73.1 | 447.2 | 4.06 | 8.00 | 0.174 |
+| PersistentKV compact workqueue | 2.00 | 1.000 | 54.9 | 447.2 | 3.05 | 1.00 | 0.161 |
+| Adaptive routed engine | 2.00 | 1.000 | 54.9 | 447.2 | 3.05 | 1.00 | 0.161 |
+
+Notes:
+- FlashInfer uses one ragged native-paged batch per decode step.
+- PersistentKV normally groups active requests by current context length and launches once per route bucket.
+- PersistentKV compact workqueue emits only non-empty row/KV-head/split tasks and then segmented-merges partial softmax states.
+- Adaptive routing uses FlashInfer for low-work steps, PersistentKV length buckets for B1 long-context steps, and PersistentKV workqueue for B8 long-context steps.
+- With --pkv-single-bucket, PersistentKV uses one masked ragged launch and row-local sequence bounds.
+- With --bucket-tokens > 0, PersistentKV rounds route lengths up; masked kernels use true per-row lengths.
+- FlashInfer plan() is included in synchronized wall time; CUDA-event time captures queued GPU work.
+- This is a first serving-loop experiment, not a full vLLM/TensorRT serving stack.

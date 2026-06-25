@@ -1,0 +1,9 @@
+PersistentKV canonical native-paged benchmark
+Shape: B=1 Hq=32 Hkv=8 G=4 d=128, page=16, 50% holes
+Table: physical_page=(405*logical_page+17) mod physical_pages
+
+| N | Contiguous ms | Native paged ms | Paged overhead |
+|---:|---:|---:|---:|
+| 8192 | 0.1526 | 0.1600 | 1.049x |
+| 32768 | 0.5757 | 0.6169 | 1.071x |
+| 65536 | 1.1754 | 1.2175 | 1.036x |

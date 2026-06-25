@@ -1,0 +1,33 @@
+=== L2 Cache Hit Rate Probe — KV Reuse Experiment ===
+RTX 3060: L2 = 2 MB
+
+Key question: Does L2 naturally cache KV when G heads access same buffer?
+If YES: L2 already provides reuse, PersistentKV's smem benefit is smaller.
+If NO:  Explicit smem tiling is necessary for reuse.
+
+N=  4096  kv=1.0 MB  L2_fits=YES
+  Reuse(1 buf x G):  0.011 ms  eff_bw=382.1 GB/s
+  NoReuse(G bufs) :  0.017 ms  eff_bw=242.1 GB/s
+  Time ratio       : 1.58x  (1.0=perfect L2 reuse, 4.0x=no L2)
+  -> L2 provides PARTIAL reuse: smem tiling still beneficial.
+
+N=  8192  kv=2.1 MB  L2_fits=YES
+  Reuse(1 buf x G):  0.024 ms  eff_bw=356.5 GB/s
+  NoReuse(G bufs) :  0.032 ms  eff_bw=265.3 GB/s
+  Time ratio       : 1.34x  (1.0=perfect L2 reuse, 4.0x=no L2)
+  -> L2 provides GOOD natural reuse: smem mainly for latency hiding.
+
+N= 16384  kv=4.2 MB  L2_fits=NO
+  Reuse(1 buf x G):  0.138 ms  eff_bw=121.2 GB/s
+  NoReuse(G bufs) :  0.068 ms  eff_bw=246.0 GB/s
+  Time ratio       : 0.49x  (1.0=perfect L2 reuse, 4.0x=no L2)
+  -> L2 provides GOOD natural reuse: smem mainly for latency hiding.
+
+N= 32768  kv=8.4 MB  L2_fits=NO
+  Reuse(1 buf x G):  0.386 ms  eff_bw=86.9 GB/s
+  NoReuse(G bufs) :  0.121 ms  eff_bw=277.9 GB/s
+  Time ratio       : 0.31x  (1.0=perfect L2 reuse, 4.0x=no L2)
+  -> L2 provides GOOD natural reuse: smem mainly for latency hiding.
+
+For full hardware counters run:
+  ncu --metrics lts__t_sector_hit_rate.pct,lts__t_sectors_srcunit_tex_op_read.sum ./05_l2_hit_rate

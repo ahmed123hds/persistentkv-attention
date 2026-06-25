@@ -1,0 +1,24 @@
+PersistentKV 8K ablations
+Shape: B=1 Hq=32 Hkv=8 G=4 N=8192 d=128 FP16
+
+=== precise_transpose ===
+PKV_FAST_EXP=0 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=0 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.384 ms | BW= 87.4 GB/s | efficiency=24% | baseline_dram=134.2MB pkv_dram=33.6MB
+=== fast_transpose ===
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=0 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.357 ms | BW= 93.9 GB/s | efficiency=26% | baseline_dram=134.2MB pkv_dram=33.6MB
+=== precise_direct ===
+PKV_FAST_EXP=0 PKV_TRANSPOSE_K=0 PKV_USE_WMMA=0 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.403 ms | BW= 83.2 GB/s | efficiency=23% | baseline_dram=134.2MB pkv_dram=33.6MB
+=== fast_direct ===
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=0 PKV_USE_WMMA=0 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.391 ms | BW= 85.8 GB/s | efficiency=24% | baseline_dram=134.2MB pkv_dram=33.6MB
+=== fast_wmma_scalar_v ===
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=1 PKV_USE_WMMA_V=0 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.153 ms | BW=219.8 GB/s | efficiency=61% | baseline_dram=134.2MB pkv_dram=33.6MB
+=== fast_wmma_value ===
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=1 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.145 ms | BW=231.8 GB/s | efficiency=64% | baseline_dram=134.2MB pkv_dram=33.6MB
+=== fast_wmma_value_single_buffer ===
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=1 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=0
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.149 ms | BW=225.5 GB/s | efficiency=63% | baseline_dram=134.2MB pkv_dram=33.6MB

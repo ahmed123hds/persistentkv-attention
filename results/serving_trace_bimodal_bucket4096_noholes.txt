@@ -1,0 +1,24 @@
+Serving trace experiment
+torch=2.5.1+cu121 cuda=12.1 gpu=NVIDIA GeForce RTX 3060
+trace=bimodal requests=24 max_active=8 measured_steps=48 repeats=1
+B active mean=7.77 max=8 exact_length_buckets mean=7.77 max=8
+PersistentKV bucket_tokens=4096 route_buckets mean=5.19 max=6
+Hq=32 Hkv=8 G=4 d=128 page=16 hole_fraction=0.00 physical_pages=28672
+dynamic lengths grow by one token per active request per measured step
+correctness vs FlashInfer: max_abs=6.104e-05 mean_abs=3.067e-06 PASS
+
+| Engine | GPU tokens/s | GPU mean step ms | GPU p95 ms | GPU p99 ms | Wall tokens/s | Wall mean step ms | Wall p95 ms | Wall p99 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| FlashInfer ragged paged batch | 2424.0 | 3.206 | 4.337 | 4.762 | 2327.2 | 3.339 | 4.424 | 5.028 |
+| PersistentKV page-aware length buckets | 2025.2 | 3.837 | 5.436 | 7.066 | 1875.1 | 4.144 | 5.900 | 7.343 |
+
+GPU speed ratio PersistentKV/FlashInfer tokens/s: 0.835x
+Wall speed ratio PersistentKV/FlashInfer tokens/s: 0.806x
+total measured decode tokens=373
+
+Notes:
+- FlashInfer uses one ragged native-paged batch per decode step.
+- PersistentKV groups active requests by exact current context length and launches once per length bucket.
+- With --bucket-tokens > 0, PersistentKV rounds lengths up and masks padded tokens inside the kernel.
+- FlashInfer plan() is included in synchronized wall time; CUDA-event time captures queued GPU work.
+- This is a first serving-loop experiment, not a full vLLM/TensorRT serving stack.

@@ -1,0 +1,6 @@
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=1 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=64 | time= 0.159 ms | BW=211.4 GB/s | efficiency=59% | baseline_dram=134.2MB pkv_dram=33.6MB
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=1 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=64 | time= 0.145 ms | BW=231.4 GB/s | efficiency=64% | baseline_dram=134.2MB pkv_dram=33.6MB
+PKV_FAST_EXP=1 PKV_TRANSPOSE_K=1 PKV_USE_WMMA=1 PKV_USE_WMMA_V=1 PKV_DOUBLE_BUFFER_V=1
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=64 | time= 0.146 ms | BW=230.5 GB/s | efficiency=64% | baseline_dram=134.2MB pkv_dram=33.6MB

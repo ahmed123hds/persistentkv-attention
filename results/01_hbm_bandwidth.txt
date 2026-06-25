@@ -1,0 +1,15 @@
+=== HBM Bandwidth Micro-Benchmark (RTX 3060, SM 8.6) ===
+
+[READ ]    1.75 ms  ->   306.6 GB/s  (bytes=536870912)
+[WRITE]    1.72 ms  ->   312.0 GB/s
+[COPY ]    3.56 ms  ->   301.3 GB/s  (read+write)
+
+Peak theoretical BW (RTX 3060): 360 GB/s
+Achieved READ efficiency:  85.2%
+Achieved COPY efficiency:  41.9%
+
+--- KV-Cache Streaming Budget ---
+  N=  4096: KV=16.78 MB -> 0.055 ms floor (memory-bound, GQA-centric)
+  N=  8192: KV=33.55 MB -> 0.109 ms floor (memory-bound, GQA-centric)
+  N= 16384: KV=67.11 MB -> 0.219 ms floor (memory-bound, GQA-centric)
+  N= 32768: KV=134.22 MB -> 0.438 ms floor (memory-bound, GQA-centric)

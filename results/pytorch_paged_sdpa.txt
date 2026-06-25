@@ -1,0 +1,18 @@
+PyTorch paged-KV materialization + SDPA
+This is a framework composition baseline, not a native paged kernel.
+Shape: B=1 Hq=32 Hkv=8 G=4 d=128 q_len=1
+
+| N | Page | Frag. | Order | SDPA contiguous | Repack | Repack + SDPA |
+|---:|---:|---:|---|---:|---:|---:|
+| 8192 | 16 | 0% | ordered | 0.155 ms | 0.720 ms | 0.842 ms |
+| 8192 | 16 | 50% | random | 0.155 ms | 0.672 ms | 0.801 ms |
+| 8192 | 32 | 0% | ordered | 0.155 ms | 0.672 ms | 0.800 ms |
+| 8192 | 32 | 50% | random | 0.155 ms | 0.672 ms | 0.801 ms |
+| 8192 | 64 | 50% | random | 0.155 ms | 0.673 ms | 0.801 ms |
+| 8192 | 128 | 50% | random | 0.155 ms | 0.674 ms | 0.803 ms |
+| 32768 | 16 | 0% | ordered | 0.461 ms | 2.645 ms | 3.096 ms |
+| 32768 | 16 | 50% | random | 0.461 ms | 2.638 ms | 3.112 ms |
+| 32768 | 32 | 0% | ordered | 0.461 ms | 2.627 ms | 3.080 ms |
+| 32768 | 32 | 50% | random | 0.461 ms | 2.648 ms | 3.102 ms |
+| 32768 | 64 | 50% | random | 0.461 ms | 2.638 ms | 3.088 ms |
+| 32768 | 128 | 50% | random | 0.461 ms | 2.640 ms | 3.092 ms |

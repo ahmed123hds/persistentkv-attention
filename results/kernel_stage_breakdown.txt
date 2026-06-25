@@ -1,0 +1,13 @@
+PersistentKV stage breakdown
+Shape: B=1 Hq=32 Hkv=8 G=4 N=8192 d=128 splits=16
+
+| Stage | Time (ms) | Fraction of full |
+|---|---:|---:|
+| WMMA score path | 0.0659 | 45.2% |
+| Softmax only | 0.0076 | 5.2% |
+| V accumulation only | 0.1129 | 77.5% |
+| WMMA V accumulation only | 0.0901 | 61.8% |
+| Split merge only | 0.0031 | 2.1% |
+| Full PersistentKV | 0.1457 | 100.0% |
+
+Isolated stages do not sum to the full kernel because the full path overlaps copies and compute.

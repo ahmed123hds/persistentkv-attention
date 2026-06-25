@@ -1,0 +1,42 @@
+# Build products and downloaded baseline trees
+build/
+
+# Local workspace metadata
+.git/
+.persistentkv-attention.git/
+.agents/
+.codex/
+
+# Python and PyTorch extension caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+*.so
+
+# LaTeX intermediates
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.toc
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/persistent_kv_attention_proposal.*
+
+# Internal analysis notes
+results/persistentkv_analysis.md
+
+# Profiling artifacts
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+
+# Local editor and environment files
+.env
+.venv/
+venv/
+.vscode/
+.idea/

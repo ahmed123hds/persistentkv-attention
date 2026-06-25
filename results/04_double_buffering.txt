@@ -1,0 +1,13 @@
+=== Double-Buffering Pipeline Idle Time (Ampere SM8.6) ===
+TILE=32, D=128, THREADS=128
+Single buf smem: 16 KB  |  Double buf smem: 32 KB
+Using PTX cp.async.cg (cache-global, bypasses L1)
+
+N=  4096 | single= 1.598 ms (  1.3 GB/s) | double= 1.263 ms (  1.7 GB/s) | gain=1.27x
+N=  8192 | single= 3.388 ms (  1.2 GB/s) | double= 2.518 ms (  1.7 GB/s) | gain=1.35x
+N= 16384 | single= 6.809 ms (  1.2 GB/s) | double= 5.041 ms (  1.7 GB/s) | gain=1.35x
+N= 32768 | single=13.696 ms (  1.2 GB/s) | double=10.089 ms (  1.7 GB/s) | gain=1.36x
+
+>>> If gain > 1.1x: async copy hides memory latency meaningfully.
+>>> Profile with:
+    ncu --metrics smsp__warp_issue_stalled_long_sb_per_warp_active.pct,l1tex__t_sector_hit_rate.pct ./04_double_buffering

@@ -1,0 +1,50 @@
+================================================================
+ PersistentKV-Attention Smoke Test
+ RTX 3060 (SM 8.6), CUDA 12.1
+ PKV_D=128 PKV_TILE=32 PKV_THREADS=128 PKV_SMEM=39.0KB
+================================================================
+
+=== SECTION 1: Correctness (vs CPU FP32 reference) ===
+  B=1 Hq=4 Hkv=1 G=4 N=257 splits=1  max_err=4.44e-05 mean_err=8.74e-06  [PASS]
+    query-head baseline             max_err=2.98e-05 mean_err=5.57e-06  [PASS]
+  B=1 Hq=8 Hkv=2 G=4 N=257 splits=4  max_err=4.46e-05 mean_err=8.89e-06  [PASS]
+  B=1 Hq=32 Hkv=8 G=4 N=512 splits=4  max_err=3.84e-05 mean_err=5.95e-06  [PASS]
+  B=2 Hq=32 Hkv=8 G=4 N=259 splits=3  max_err=4.85e-05 mean_err=8.42e-06  [PASS]
+  B=1 Hq=32 Hkv=4 G=8 N=511 splits=4  max_err=3.04e-05 mean_err=3.69e-06  [PASS]
+  B=1 Hq=8 Hkv=8 G=1 N=256 splits=2  max_err=5.59e-05 mean_err=5.14e-06  [PASS]
+  PAGED B=1 Hq=8 Hkv=2 G=4 N=257 page=16 splits=4  max_err=7.46e-05 mean_err=8.70e-06  [PASS]
+  PAGED B=2 Hq=8 Hkv=2 G=4 N=259 page=32 splits=3  max_err=4.34e-05 mean_err=8.43e-06  [PASS]
+
+Correctness: ALL PASSED
+
+=== SECTION 2: Performance Sweep (latency + effective BW) ===
+Peak HBM bandwidth (RTX 3060): ~360 GB/s
+
+--- GQA: Hq=32, Hkv=8, G=4, d=128 ---
+  B= 1 Hq=32 Hkv=8 G=4 N=  4096 splits=16 | time= 0.076 ms | BW=221.9 GB/s | efficiency=62% | baseline_dram=67.1MB pkv_dram=16.8MB | query_head= 0.799 ms speedup=10.57x
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.142 ms | BW=237.1 GB/s | efficiency=66% | baseline_dram=134.2MB pkv_dram=33.6MB | query_head= 1.481 ms speedup=10.47x
+  B= 1 Hq=32 Hkv=8 G=4 N= 16384 splits=16 | time= 0.284 ms | BW=236.3 GB/s | efficiency=66% | baseline_dram=268.4MB pkv_dram=67.1MB | query_head= 2.921 ms speedup=10.28x
+  B= 1 Hq=32 Hkv=8 G=4 N= 32768 splits=16 | time= 0.563 ms | BW=238.6 GB/s | efficiency=66% | baseline_dram=536.9MB pkv_dram=134.2MB | query_head= 6.112 ms speedup=10.87x
+
+--- MQA-like: Hq=8, Hkv=1, G=8, d=128 ---
+  B= 1 Hq= 8 Hkv=1 G=8 N=  4096 splits=128 | time= 0.063 ms | BW= 33.4 GB/s | efficiency=9% | baseline_dram=16.8MB pkv_dram=2.1MB | query_head= 0.740 ms speedup=11.78x
+  B= 1 Hq= 8 Hkv=1 G=8 N=  8192 splits=128 | time= 0.089 ms | BW= 47.0 GB/s | efficiency=13% | baseline_dram=33.6MB pkv_dram=4.2MB | query_head= 1.447 ms speedup=16.20x
+
+--- Batch sweep: Hq=32, Hkv=8, N=8192 ---
+  B= 1 Hq=32 Hkv=8 G=4 N=  8192 splits=16 | time= 0.141 ms | BW=237.4 GB/s | efficiency=66% | baseline_dram=134.2MB pkv_dram=33.6MB
+  B= 2 Hq=32 Hkv=8 G=4 N=  8192 splits= 8 | time= 0.272 ms | BW=247.0 GB/s | efficiency=69% | baseline_dram=268.4MB pkv_dram=67.1MB
+  B= 4 Hq=32 Hkv=8 G=4 N=  8192 splits= 4 | time= 0.555 ms | BW=241.7 GB/s | efficiency=67% | baseline_dram=536.9MB pkv_dram=134.2MB
+  B= 8 Hq=32 Hkv=8 G=4 N=  8192 splits= 2 | time= 1.170 ms | BW=229.5 GB/s | efficiency=64% | baseline_dram=1073.7MB pkv_dram=268.4MB
+
+--- G sweep: N=8192 ---
+  B= 1 Hq= 4 Hkv=4 G=1 N=  8192 splits=32 | time= 0.165 ms | BW=101.7 GB/s | efficiency=28% | baseline_dram=16.8MB pkv_dram=16.8MB
+  B= 1 Hq= 8 Hkv=4 G=2 N=  8192 splits=32 | time= 0.168 ms | BW=100.0 GB/s | efficiency=28% | baseline_dram=33.6MB pkv_dram=16.8MB
+  B= 1 Hq=16 Hkv=4 G=4 N=  8192 splits=32 | time= 0.085 ms | BW=196.3 GB/s | efficiency=55% | baseline_dram=67.1MB pkv_dram=16.8MB
+  B= 1 Hq=32 Hkv=4 G=8 N=  8192 splits=32 | time= 0.304 ms | BW= 55.2 GB/s | efficiency=15% | baseline_dram=134.2MB pkv_dram=16.8MB
+
+================================================================
+Done. For full hardware profiling run:
+  ncu --kernel-name-base demangled --kernel-name 'regex:.*persistentkv_decode_kernel.*' \
+      --launch-count 1 --metrics dram__bytes_read.sum,lts__t_sector_hit_rate.pct,\
+      sm__warps_active.avg.pct_of_peak_sustained_active ./smoke_test --profile
+================================================================

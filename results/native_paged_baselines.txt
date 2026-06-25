@@ -1,0 +1,31 @@
+Native paged-attention baselines
+torch=2.5.1+cu121 cuda=12.1 gpu=NVIDIA GeForce RTX 3060
+B=1 Hq=32 Hkv=8 G=4 d=128 FP16 page=16, 50% holes
+table[p]=(405*p+17) mod physical_pages
+tolerance: max_abs<2e-3 and mean_abs<3e-4
+
+| Method | N | Time (ms) | Max error | Mean error | Correct |
+|---|---:|---:|---:|---:|---|
+| vLLM 0.6.4.post1 | 8192 | 0.1497 | 3.052e-05 | 6.860e-06 | PASS |
+| FlashInfer 0.2.5 (cuda-core) | 8192 | 0.1194 | 3.052e-05 | 4.902e-06 | PASS |
+| TensorRT-LLM 0.8 MMHA | 8192 | 0.7979 | 6.104e-05 | 6.661e-06 | PASS |
+| Repack + PyTorch SDPA | 8192 | 0.6473 | - | - | reference path |
+| vLLM 0.6.4.post1 | 32768 | 0.5868 | 1.526e-05 | 3.548e-06 | PASS |
+| FlashInfer 0.2.5 (tensor-core) | 32768 | 0.4388 | 1.526e-05 | 2.467e-06 | PASS |
+| TensorRT-LLM 0.8 MMHA | 32768 | 0.8920 | 3.052e-05 | 4.175e-06 | PASS |
+| Repack + PyTorch SDPA | 32768 | 2.4197 | - | - | reference path |
+| vLLM 0.6.4.post1 | 65536 | 1.1512 | 1.526e-05 | 2.472e-06 | PASS |
+| FlashInfer 0.2.5 (tensor-core) | 65536 | 0.8889 | 1.526e-05 | 1.796e-06 | PASS |
+| TensorRT-LLM 0.8 MMHA | 65536 | 1.5901 | 3.052e-05 | 3.261e-06 | PASS |
+| Repack + PyTorch SDPA | 65536 | 4.9840 | - | - | reference path |
+
+PersistentKV native paged: 0.1600 ms (8K), 0.6169 ms (32K), 1.2175 ms (64K).
+
+TensorRT-LLM note: the v0.8 optimized XQA specialization does not support
+G=4 with 16-token pages, so this uses its native production MMHA fallback.
+That path also updates the current token's K/V entry, matching TensorRT-LLM
+decode semantics; all setup and allocations remain outside the timed region.
+
+Version note: these are official kernels compatible with the existing
+PyTorch 2.5.1/CUDA 12.1 environment. They are not a claim against the latest
+June 2026 package releases.

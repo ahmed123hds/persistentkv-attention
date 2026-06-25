@@ -1,0 +1,22 @@
+Serving trace experiment
+torch=2.5.1+cu121 cuda=12.1 gpu=NVIDIA GeForce RTX 3060
+trace=bimodal requests=12 max_active=4 measured_steps=8 repeats=1
+B active mean=4.00 max=4 length_buckets mean=4.00 max=4
+Hq=32 Hkv=8 G=4 d=128 page=16 hole_fraction=0.50 physical_pages=23664
+dynamic lengths grow by one token per active request per measured step
+correctness vs FlashInfer: max_abs=3.052e-05 mean_abs=3.485e-06 PASS
+
+| Engine | GPU tokens/s | GPU mean step ms | GPU p95 ms | GPU p99 ms | Wall tokens/s | Wall mean step ms | Wall p95 ms | Wall p99 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| FlashInfer ragged paged batch | 3611.8 | 1.107 | 1.468 | 1.468 | 3375.8 | 1.185 | 2.415 | 2.415 |
+| PersistentKV page-aware length buckets | 2554.8 | 1.566 | 2.663 | 2.663 | 2912.1 | 1.374 | 1.802 | 1.802 |
+
+GPU speed ratio PersistentKV/FlashInfer tokens/s: 0.707x
+Wall speed ratio PersistentKV/FlashInfer tokens/s: 0.863x
+total measured decode tokens=32
+
+Notes:
+- FlashInfer uses one ragged native-paged batch per decode step.
+- PersistentKV groups active requests by exact current context length and launches once per length bucket.
+- FlashInfer plan() is included in synchronized wall time; CUDA-event time captures queued GPU work.
+- This is a first serving-loop experiment, not a full vLLM/TensorRT serving stack.
