@@ -34,15 +34,16 @@ TORCH_EXTENSIONS_DIR="$PWD/build/baselines/torch_extensions" \
 The five-seed and split-sensitivity sections completed and wrote logs under
 `results/review_ablations/`.
 
-The full-size GQA serving sweep stopped at `G=1` because that configuration
-uses `Hkv=32` and exceeded the 12 GB VRAM budget on the 24-request trace:
+The original ungated full-size GQA serving sweep stopped at `G=1` because that
+configuration uses `Hkv=32` and exceeded the 12 GB VRAM budget on the
+24-request trace:
 
 ```text
 torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.96 GiB.
 ```
 
-To still test the GQA/MQA serving behavior, the GQA sweep was rerun on a
-smaller B8 trace:
+After adding the GQA gate, the GQA/MQA serving behavior was rerun on a smaller
+B8 trace:
 
 ```bash
 for hkv in 32 8 4; do

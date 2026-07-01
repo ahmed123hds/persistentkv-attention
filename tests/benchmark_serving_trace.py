@@ -34,6 +34,11 @@ DIM = 128
 PAGE_SIZE = 16
 MAX_ERROR = 2e-3
 MEAN_ERROR = 3e-4
+SM_COUNT = 28
+ROOFLINE_READ_GBPS = 302.0
+LAUNCH_OVERHEAD_US = 8.0
+MIN_CTAS_PER_SM = 4.0
+SUPPORTED_PERSISTENTKV_GQA = 4
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,14 @@ class RouteProfile:
     useful_kv_read_mb: float
     merge_state_mb: float
     merge_launches_per_step: float
+
+
+@dataclass(frozen=True)
+class RouteEstimate:
+    route: str
+    splits: int
+    estimated_ms: float
+    reason: str
 
 
 def import_flashinfer():
@@ -318,6 +331,101 @@ def choose_workqueue_row_splits(
     return max(4, min(splits, 48, tiles))
 
 
+def model_bucket_splits(state: StepState) -> int:
+    active = len(state.active_ids)
+    max_tiles = max((length + 31) // 32 for length in state.lengths)
+    min_tiles = min((length + 31) // 32 for length in state.lengths)
+    occupancy = math.ceil(256 / (HKV * max(1, active)))
+    length_based = math.ceil(max_tiles / 96)
+    return max(4, min(round_up4(max(occupancy, length_based)), 48, min_tiles))
+
+
+def model_workqueue_splits(state: StepState) -> int:
+    row_splits = [
+        choose_workqueue_row_splits(
+            length,
+            len(state.active_ids),
+            requested_splits=1,
+            auto_splits=True,
+        )
+        for length in state.lengths
+    ]
+    return max(row_splits)
+
+
+def estimate_route_ms(state: StepState, route: str, splits: int) -> float:
+    kv_mb = useful_kv_mb_for_state(state)
+    kv_ms = kv_mb / ROOFLINE_READ_GBPS
+    active = len(state.active_ids)
+    unique_lengths = len(set(state.lengths))
+
+    if route == "flashinfer":
+        ctas_per_sm = active * HKV / SM_COUNT
+        launch_count = 1
+        merge_mb = 0.0
+    elif route == "persistentkv_bucket":
+        ctas_per_sm = active * HKV * splits / SM_COUNT
+        launch_count = 2 * unique_lengths
+        merge_mb = active * HQ * splits * (2 + DIM) * 4 / (1024.0 * 1024.0)
+    elif route == "persistentkv_workqueue":
+        ctas_per_sm = active * HKV * splits / SM_COUNT
+        launch_count = 2
+        merge_mb = active * HQ * splits * (2 + DIM) * 4 / (1024.0 * 1024.0)
+    else:
+        raise ValueError(f"unknown route: {route}")
+
+    occupancy_penalty = max(1.0, MIN_CTAS_PER_SM / max(ctas_per_sm, 1e-6))
+    launch_ms = launch_count * LAUNCH_OVERHEAD_US / 1000.0
+    merge_ms = merge_mb / ROOFLINE_READ_GBPS
+    return kv_ms * occupancy_penalty + merge_ms + launch_ms
+
+
+def choose_adaptive_route_cost_model(state: StepState) -> RouteEstimate:
+    gqa_ratio = HQ // HKV
+    if gqa_ratio != SUPPORTED_PERSISTENTKV_GQA:
+        return RouteEstimate(
+            route="flashinfer",
+            splits=1,
+            estimated_ms=estimate_route_ms(state, "flashinfer", 1),
+            reason=f"G={gqa_ratio} is outside the calibrated PersistentKV GQA route",
+        )
+
+    active = len(state.active_ids)
+    max_len = max(state.lengths)
+    if max_len < 16384:
+        return RouteEstimate(
+            route="flashinfer",
+            splits=1,
+            estimated_ms=estimate_route_ms(state, "flashinfer", 1),
+            reason="short-context decode is launch/merge-overhead dominated",
+        )
+
+    flash_ms = estimate_route_ms(state, "flashinfer", 1)
+    candidates = [RouteEstimate("flashinfer", 1, flash_ms, "baseline")]
+    if active <= 1:
+        splits = model_bucket_splits(state)
+        candidates.append(
+            RouteEstimate(
+                "persistentkv_bucket",
+                splits,
+                estimate_route_ms(state, "persistentkv_bucket", splits),
+                "B1 long-context sequence splitting exposes CTAs",
+            )
+        )
+    if active >= 8:
+        splits = model_workqueue_splits(state)
+        candidates.append(
+            RouteEstimate(
+                "persistentkv_workqueue",
+                splits,
+                estimate_route_ms(state, "persistentkv_workqueue", splits),
+                "B8 ragged long-context workqueue avoids length-bucket launch fan-out",
+            )
+        )
+
+    return min(candidates, key=lambda item: item.estimated_ms)
+
+
 def use_single_bucket_for_state(
     state: StepState,
     requested_single_bucket: bool,
@@ -335,13 +443,7 @@ def use_single_bucket_for_state(
 
 
 def choose_adaptive_engine(state: StepState) -> str:
-    active = len(state.active_ids)
-    max_len = max(state.lengths)
-    if active <= 1:
-        return "persistentkv_bucket"
-    if active >= 8 and max_len >= 16384:
-        return "persistentkv_workqueue"
-    return "flashinfer"
+    return choose_adaptive_route_cost_model(state).route
 
 
 def useful_kv_mb_for_state(state: StepState) -> float:
@@ -1055,22 +1157,38 @@ def main() -> None:
     steps = build_steps(requests, args.max_active)[:args.steps]
     if not steps:
         raise SystemExit("trace produced no active decode steps")
+    adaptive_routes = [choose_adaptive_engine(state) for state in steps]
+    adaptive_uses_persistentkv = (
+        not args.adaptive_engine
+        or any(route != "flashinfer" for route in adaptive_routes)
+    )
 
     print("Loading kernels...")
     flashinfer = import_flashinfer()
-    persistentkv = import_persistentkv()
+    persistentkv = import_persistentkv() if adaptive_uses_persistentkv else None
 
     generator = torch.Generator(device="cuda")
     generator.manual_seed(args.seed + 7)
-    k_pages_pkv = torch.randn(
-        physical_pages, HKV, PAGE_SIZE, DIM,
-        generator=generator,
-        device="cuda",
-        dtype=torch.float16,
-    )
-    v_pages_pkv = torch.randn_like(k_pages_pkv)
-    k_pages_flashinfer = k_pages_pkv.permute(0, 2, 1, 3).contiguous()
-    v_pages_flashinfer = v_pages_pkv.permute(0, 2, 1, 3).contiguous()
+    if adaptive_uses_persistentkv:
+        k_pages_pkv = torch.randn(
+            physical_pages, HKV, PAGE_SIZE, DIM,
+            generator=generator,
+            device="cuda",
+            dtype=torch.float16,
+        )
+        v_pages_pkv = torch.randn_like(k_pages_pkv)
+        k_pages_flashinfer = k_pages_pkv.permute(0, 2, 1, 3).contiguous()
+        v_pages_flashinfer = v_pages_pkv.permute(0, 2, 1, 3).contiguous()
+    else:
+        k_pages_flashinfer = torch.randn(
+            physical_pages, PAGE_SIZE, HKV, DIM,
+            generator=generator,
+            device="cuda",
+            dtype=torch.float16,
+        )
+        v_pages_flashinfer = torch.randn_like(k_pages_flashinfer)
+        k_pages_pkv = torch.empty(0, device="cuda", dtype=torch.float16)
+        v_pages_pkv = torch.empty(0, device="cuda", dtype=torch.float16)
     q_pool = make_q_pool(steps, args.requests, args.seed)
     workspace_splits = max(
         args.splits,
@@ -1095,7 +1213,10 @@ def main() -> None:
     persistentkv_metadata = None
     persistentkv_bucket_metadata = None
     persistentkv_workqueue_metadata = None
-    if args.precompute_metadata or args.pkv_workqueue or args.adaptive_engine:
+    if (
+        (args.precompute_metadata or args.pkv_workqueue)
+        and adaptive_uses_persistentkv
+    ) or (args.adaptive_engine and adaptive_uses_persistentkv):
         flashinfer_metadata = compile_flashinfer_metadata(requests, steps)
         persistentkv_metadata = compile_persistentkv_metadata(
             requests,
@@ -1129,6 +1250,9 @@ def main() -> None:
                 True,
             )
         torch.cuda.synchronize()
+    elif args.precompute_metadata or args.adaptive_engine:
+        flashinfer_metadata = compile_flashinfer_metadata(requests, steps)
+        torch.cuda.synchronize()
 
     def flashinfer_step(index: int, state: StepState) -> torch.Tensor:
         if flashinfer_metadata is not None:
@@ -1152,6 +1276,8 @@ def main() -> None:
         )
 
     def persistentkv_step_uncaptured(index: int, state: StepState) -> torch.Tensor:
+        if persistentkv is None:
+            raise RuntimeError("PersistentKV route was not compiled")
         if persistentkv_metadata is not None:
             return run_persistentkv_step_compiled(
                 persistentkv,
@@ -1181,6 +1307,8 @@ def main() -> None:
         )
 
     def persistentkv_bucket_step(index: int, state: StepState) -> torch.Tensor:
+        if persistentkv is None:
+            raise RuntimeError("PersistentKV bucket route was not compiled")
         if persistentkv_bucket_metadata is None:
             raise RuntimeError("bucket metadata was not compiled")
         return run_persistentkv_step_compiled(
@@ -1195,6 +1323,8 @@ def main() -> None:
         )
 
     def persistentkv_workqueue_step(index: int, state: StepState) -> torch.Tensor:
+        if persistentkv is None:
+            raise RuntimeError("PersistentKV workqueue route was not compiled")
         if persistentkv_workqueue_metadata is None:
             raise RuntimeError("workqueue metadata was not compiled")
         return run_persistentkv_step_compiled(
@@ -1207,8 +1337,6 @@ def main() -> None:
             persistentkv_workqueue_metadata,
             args.pkv_fused_merge,
         )
-
-    adaptive_routes = [choose_adaptive_engine(state) for state in steps]
 
     def adaptive_step(index: int, state: StepState) -> torch.Tensor:
         route = adaptive_routes[index]
@@ -1258,34 +1386,37 @@ def main() -> None:
         "FlashInfer", flashinfer_step, steps, args.warmup_steps, args.repeats
     )
     if args.adaptive_engine:
-        bucket_stats = benchmark_engine(
-            "PersistentKV bucket",
-            persistentkv_bucket_step,
-            steps,
-            args.warmup_steps,
-            args.repeats,
-        )
-        workqueue_stats = benchmark_engine(
-            "PersistentKV workqueue",
-            persistentkv_workqueue_step,
-            steps,
-            args.warmup_steps,
-            args.repeats,
-        )
         if all(route == "flashinfer" for route in adaptive_routes):
+            bucket_stats = None
+            workqueue_stats = None
             persistentkv_stats = flashinfer_stats
-        elif all(route == "persistentkv_bucket" for route in adaptive_routes):
-            persistentkv_stats = bucket_stats
-        elif all(route == "persistentkv_workqueue" for route in adaptive_routes):
-            persistentkv_stats = workqueue_stats
         else:
-            persistentkv_stats = benchmark_engine(
-                "Adaptive routed engine",
-                adaptive_step,
+            bucket_stats = benchmark_engine(
+                "PersistentKV bucket",
+                persistentkv_bucket_step,
                 steps,
                 args.warmup_steps,
                 args.repeats,
             )
+            workqueue_stats = benchmark_engine(
+                "PersistentKV workqueue",
+                persistentkv_workqueue_step,
+                steps,
+                args.warmup_steps,
+                args.repeats,
+            )
+            if all(route == "persistentkv_bucket" for route in adaptive_routes):
+                persistentkv_stats = bucket_stats
+            elif all(route == "persistentkv_workqueue" for route in adaptive_routes):
+                persistentkv_stats = workqueue_stats
+            else:
+                persistentkv_stats = benchmark_engine(
+                    "Adaptive routed engine",
+                    adaptive_step,
+                    steps,
+                    args.warmup_steps,
+                    args.repeats,
+                )
     else:
         bucket_stats = None
         workqueue_stats = None
@@ -1314,22 +1445,37 @@ def main() -> None:
     total_decode_tokens = sum(active_counts) * args.repeats
     flash_profile = flashinfer_profile(steps)
     if args.adaptive_engine:
-        assert persistentkv_bucket_metadata is not None
-        assert persistentkv_workqueue_metadata is not None
-        bucket_prof = bucket_profile(persistentkv_bucket_metadata, steps)
-        workqueue_prof = workqueue_profile(
-            persistentkv_workqueue_metadata, steps, args.pkv_fused_merge
-        )
-        adaptive_prof = adaptive_profile(
-            flash_profile, bucket_prof, workqueue_prof, steps
-        )
+        if adaptive_uses_persistentkv:
+            assert persistentkv_bucket_metadata is not None
+            assert persistentkv_workqueue_metadata is not None
+            bucket_prof = bucket_profile(persistentkv_bucket_metadata, steps)
+            workqueue_prof = workqueue_profile(
+                persistentkv_workqueue_metadata, steps, args.pkv_fused_merge
+            )
+            adaptive_prof = adaptive_profile(
+                flash_profile, bucket_prof, workqueue_prof, steps
+            )
+        else:
+            bucket_prof = None
+            workqueue_prof = None
+            adaptive_prof = flash_profile
         route_counts = {
             "flashinfer": sum(1 for route in adaptive_routes if route == "flashinfer"),
             "persistentkv_bucket": sum(1 for route in adaptive_routes if route == "persistentkv_bucket"),
             "persistentkv_workqueue": sum(1 for route in adaptive_routes if route == "persistentkv_workqueue"),
         }
+        route_estimates = [choose_adaptive_route_cost_model(state) for state in steps]
+        route_split_summary = {
+            route: sorted({
+                estimate.splits
+                for estimate in route_estimates
+                if estimate.route == route
+            })
+            for route in route_counts
+        }
     else:
         route_counts = None
+        route_split_summary = None
         bucket_prof = None
         workqueue_prof = None
         adaptive_prof = None
@@ -1357,16 +1503,24 @@ def main() -> None:
         format_row("FlashInfer ragged paged batch", flashinfer_stats),
     ]
     if args.adaptive_engine:
-        assert bucket_stats is not None
-        assert workqueue_stats is not None
+        assert route_counts is not None
         lines.extend([
-            format_row("PersistentKV length buckets", bucket_stats),
-            format_row("PersistentKV compact workqueue", workqueue_stats),
+            *(
+                [format_row("PersistentKV length buckets", bucket_stats)]
+                if bucket_stats is not None
+                else []
+            ),
+            *(
+                [format_row("PersistentKV compact workqueue", workqueue_stats)]
+                if workqueue_stats is not None
+                else []
+            ),
             format_row("Adaptive routed engine", persistentkv_stats),
             "",
             f"GPU speed ratio Adaptive/FlashInfer tokens/s: {persistentkv_stats['event_tokens_s'] / flashinfer_stats['event_tokens_s']:.3f}x",
             f"Wall speed ratio Adaptive/FlashInfer tokens/s: {persistentkv_stats['wall_tokens_s'] / flashinfer_stats['wall_tokens_s']:.3f}x",
             f"Adaptive route counts: flashinfer={route_counts['flashinfer']} persistentkv_bucket={route_counts['persistentkv_bucket']} persistentkv_workqueue={route_counts['persistentkv_workqueue']}",
+            f"Adaptive cost-model candidate splits: flashinfer={route_split_summary['flashinfer']} persistentkv_bucket={route_split_summary['persistentkv_bucket']} persistentkv_workqueue={route_split_summary['persistentkv_workqueue']}",
         ])
     else:
         lines.extend([
@@ -1379,8 +1533,6 @@ def main() -> None:
         f"total measured decode tokens={total_decode_tokens}",
     ])
     if args.adaptive_engine:
-        assert bucket_prof is not None
-        assert workqueue_prof is not None
         assert adaptive_prof is not None
         lines.extend([
             "",
@@ -1388,8 +1540,16 @@ def main() -> None:
             "| Engine | CUDA launches/step | Non-empty CTA fraction | Decode CTA work/SM | Useful KV read MB/step | Merge state MB/step | Merge launches/step | Python+scheduling ms/step |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
             format_profile_row("FlashInfer ragged paged batch", flash_profile, flashinfer_stats),
-            format_profile_row("PersistentKV length buckets", bucket_prof, bucket_stats),
-            format_profile_row("PersistentKV compact workqueue", workqueue_prof, workqueue_stats),
+            *(
+                [format_profile_row("PersistentKV length buckets", bucket_prof, bucket_stats)]
+                if bucket_prof is not None and bucket_stats is not None
+                else []
+            ),
+            *(
+                [format_profile_row("PersistentKV compact workqueue", workqueue_prof, workqueue_stats)]
+                if workqueue_prof is not None and workqueue_stats is not None
+                else []
+            ),
             format_profile_row("Adaptive routed engine", adaptive_prof, persistentkv_stats),
         ])
     lines.extend([
@@ -1398,7 +1558,7 @@ def main() -> None:
         "- FlashInfer uses one ragged native-paged batch per decode step.",
         "- PersistentKV normally groups active requests by current context length and launches once per route bucket.",
         "- PersistentKV compact workqueue emits only non-empty row/KV-head/split tasks and then segmented-merges partial softmax states.",
-        "- Adaptive routing uses FlashInfer for low-work steps, PersistentKV length buckets for B1 long-context steps, and PersistentKV workqueue for B8 long-context steps.",
+        "- Adaptive routing uses a lightweight calibrated cost model with a GQA gate: unsupported GQA ratios route to FlashInfer.",
         "- With --pkv-single-bucket, PersistentKV uses one masked ragged launch and row-local sequence bounds.",
         "- With --bucket-tokens > 0, PersistentKV rounds route lengths up; masked kernels use true per-row lengths.",
         "- FlashInfer plan() is included in synchronized wall time; CUDA-event time captures queued GPU work.",

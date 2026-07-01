@@ -33,12 +33,12 @@ Seed: `20260623`.
 The full 24-request G=1 trace exceeded 12 GB VRAM, so this sweep uses a smaller
 B8 bimodal trace with 8 requests and 24 measured steps. Seed: `20260623`.
 
-| G | Hkv | CUDA tok/s ratio | Wall tok/s ratio | Worst error |
-|---:|---:|---:|---:|---:|
-| 1 | 32 | 0.489 | 0.504 | 6.104e-05 |
-| 4 | 8 | 1.228 | 1.239 | 6.104e-05 |
-| 8 | 4 | 0.263 | 0.276 | 1.221e-04 |
+| G | Hkv | Selected route | CUDA tok/s ratio | Wall tok/s ratio | Worst error |
+|---:|---:|---|---:|---:|---:|
+| 1 | 32 | FlashInfer gate | 1.000 | 1.000 | 0.000e+00 |
+| 4 | 8 | PersistentKV workqueue | 1.257 | 1.256 | 6.104e-05 |
+| 8 | 4 | FlashInfer gate | 1.000 | 1.000 | 0.000e+00 |
 
 This confirms that the current serving win is specific to the tested G=4
-regime. G=1 and G=8 should route to FlashInfer under a production policy.
-
+regime. The cost-model gate now routes G=1 and G=8 to FlashInfer rather than
+executing the losing PersistentKV workqueue path.

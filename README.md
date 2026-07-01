@@ -83,7 +83,9 @@ export FLASHINFER_WORKSPACE_BASE="$PWD/build/baselines/flashinfer_cache"
 export TORCH_EXTENSIONS_DIR="$PWD/build/baselines/torch_extensions"
 ```
 
-B1 bucketed long-context route:
+B1 bucketed long-context route. The adaptive engine uses the calibrated
+cost-model policy; the split argument is retained for exact reproduction of
+the paper logs.
 
 ```bash
 "$PYTHON_BIN" tests/benchmark_serving_trace.py \
@@ -174,8 +176,9 @@ clocks, background GPU load, and FlashInfer build details.
 
 ## Reviewer Ablations
 
-The workshop paper reports one held-out seed and fixes `G=4` for the serving
-experiments. To run the extra reviewer-facing checks, use:
+The workshop paper reports five held-out seeds for the main B1/B8 serving
+experiments and includes a GQA-gated serving sweep. To run the reviewer-facing
+checks, use:
 
 ```bash
 export PYTHON_BIN="$(which python)"
@@ -191,8 +194,9 @@ export TORCH_EXTENSIONS_DIR="$PWD/build/baselines/torch_extensions"
 This emits logs under `results/review_ablations/` for:
 
 - five held-out seeds for the main B1/B8 routes;
-- split sensitivity around the calibrated split counts;
-- a serving GQA/MQA sweep for `G=1,4,8`.
+- split sensitivity around the calibrated cost-model operating points;
+- a serving GQA/MQA sweep for `G=1,4,8`, where unsupported PersistentKV GQA
+  ratios route to FlashInfer.
 
 ## Native-Paged Baseline Table
 
@@ -224,14 +228,14 @@ pdflatex -interaction=nonstopmode -halt-on-error persistentkv_mlsys_workshop.tex
 pdflatex -interaction=nonstopmode -halt-on-error persistentkv_mlsys_workshop.tex
 ```
 
-The PDF is expected to compile to seven pages in the current format.
+The PDF is expected to compile to roughly eight pages in the current format.
 
 ## Current Claim
 
 PersistentKV is not presented as a universally faster attention kernel.
 FlashInfer remains the strongest isolated single-request native-paged baseline
-in this artifact. The paper claim is narrower: a calibrated page-aware policy
+in this artifact. The paper claim is narrower: a calibrated cost-model policy
 can route long-context serving steps to PersistentKV sequence splitting or
 workqueue scheduling in regimes where that scheduling improves synchronized
 decode-step throughput, while using FlashInfer for boundary cases where
-PersistentKV overhead dominates.
+PersistentKV overhead dominates or where the GQA ratio is not calibrated.

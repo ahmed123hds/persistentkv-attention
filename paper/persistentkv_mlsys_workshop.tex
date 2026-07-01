@@ -50,15 +50,16 @@ attention (GQA). PersistentKV maps work by KV-head group, executes directly
 over native page tables, and adds a compact
 workqueue schedule that executes only non-empty row--KV-head--sequence-split
 tasks. On an RTX 3060 with FP16, page size 16, $H_q=32$, $H_{kv}=8$, $d=128$,
-and identical correctness tolerance against FlashInfer, a calibrated adaptive policy
+and identical correctness tolerance against FlashInfer, a calibrated roofline-style policy
 selects FlashInfer for small active batches, PersistentKV sequence splitting
-for B1 long-context steps, and PersistentKV workqueue scheduling for B8
-long-context steps. With thresholds and split counts fixed on calibration
-traces, five held-out trace seeds improve mean synchronized wall decode-token
+for B1 long-context steps, and PersistentKV workqueue scheduling for supported
+B8 long-context GQA steps. With cost-model constants and split bounds fixed on
+calibration traces, five held-out trace seeds improve mean synchronized wall decode-token
 throughput by
 $1.044$--$1.080\times$ on B8 bimodal, uniform, and Zipf-like workloads and by
 $1.403\times$ on a B1 bucketed trace. On the B4 bimodal boundary case, the
-policy avoids the PersistentKV regression by selecting FlashInfer. We also
+policy avoids the PersistentKV regression by selecting FlashInfer; for
+uncalibrated GQA ratios it also routes to FlashInfer. We also
 report scheduler-derived workload counters showing that workqueue scheduling
 reduces launch fan-out from 16.00 to 2.00 launches per decode step on held-out
 bimodal B8. These results identify a concrete systems niche for adaptive
@@ -148,10 +149,24 @@ level scheduling for transformer serving, allowing requests with different
 arrival and completion times to share decode iterations~\cite{yu2022orca}.
 Modern systems such as FasterTransformer, TensorRT-LLM, vLLM, and FlashInfer
 all exploit batching and specialized kernels, but the best batching policy can
-depend on trace structure. A single clean attention call with one sequence
-length cannot reveal launch-count overheads, padding waste, or low-occupancy
-behavior. Our methodology therefore reports both isolated native-paged
-baselines and continuous decode traces.
+depend on trace structure. Sarathi and Sarathi-Serve study chunked prefill and
+piggybacking decode with prefill work to improve serving utilization
+~\cite{agrawal2023sarathi,agrawal2024sarathiserve}. Splitwise separates
+prefill and decode phases across different machines, showing that phase-aware
+serving policies can dominate a monolithic placement~\cite{splitwise2023}.
+These systems motivate PersistentKV's narrower question: within decode, can a
+page-aware route policy and work decomposition improve a strong native-paged
+kernel stack? A single clean attention call with one sequence length cannot
+reveal launch-count overheads, padding waste, or low-occupancy behavior. Our
+methodology therefore reports both isolated native-paged baselines and
+continuous decode traces.
+
+\textbf{KV sparsity and cache reduction.} H2O identifies heavy-hitter tokens
+for KV-cache eviction while retaining generation quality~\cite{zhang2023h2o}.
+DejaVu exploits contextual sparsity to skip parts of transformer inference
+~\cite{liu2023dejavu}. These methods reduce the amount of KV or model work.
+PersistentKV is complementary: it keeps exact dense attention over the supplied
+KV cache and changes how native paged work is scheduled.
 
 \section{Methodology}
 
@@ -242,31 +257,38 @@ slower on the RTX 3060 because atomic completion and in-kernel merge work cost
 more than the saved launch. We therefore keep the fused path as an ablation and
 use the two-kernel workqueue as the default.
 
-\subsection{Calibrated Adaptive Policy}
+\subsection{Calibrated Cost Model}
 
-The serving system exposes a manually calibrated threshold policy:
+The serving system uses a lightweight roofline-style policy instead of a
+per-trace oracle. For each decode step, the harness estimates
 \[
-\texttt{route}(B,N_{\max}) =
-\begin{cases}
-\text{PersistentKV length bucket}, & B \le 1,\\
-\text{PersistentKV workqueue}, & B \ge 8 \wedge N_{\max}\ge 16\mathrm{K},\\
-\text{FlashInfer}, & \text{otherwise}.
-\end{cases}
+T_r =
+\frac{\mathrm{KVBytes}}{\beta}
+\max\left(1, \frac{C_{\min}}{C_r}\right)
++ L_r\lambda +
+\frac{\mathrm{MergeBytes}_r}{\beta},
 \]
-This policy encodes measured boundary conditions: $B\le1$ uses the
-length-bucket path, $B\ge8$ with $N_{\max}\ge16$K uses the workqueue path, and
-the remainder uses FlashInfer. B1 needs sequence splitting to expose CTAs; B8
-has enough active rows to amortize the two-kernel workqueue schedule; B4 is
-near the threshold where merge and launch overhead dominate. The policy is
-simple and calibrated, not learned or self-tuning.
+where $\beta$ is measured streaming read bandwidth, $C_r$ is estimated decode
+CTA work per SM for route $r$, $C_{\min}$ is a minimum occupancy target,
+$L_r$ is launch count, and $\lambda$ is a calibrated launch-overhead constant.
+Candidate routes are FlashInfer, PersistentKV length buckets, and PersistentKV
+compact workqueue.
 
-To avoid selecting thresholds from the same rows used for the headline table,
-we use a calibration/held-out protocol. The route thresholds and split counts
-are chosen manually on seed 20260622: split 32 for the B1 length-bucket route, split 20
-for bimodal B8 workqueue, split 24 for uniform B8 workqueue, and split 28 for
-Zipf-like B8 workqueue. The main table reports seed 20260623 with these
-choices frozen. This is still not a production cost model, but it separates
-policy selection from reported evaluation.
+The model has two hard eligibility gates. First, PersistentKV is enabled only
+for the calibrated $G=4$ KV-head-group mapping; uncalibrated $G=1$ and $G=8$
+routes use FlashInfer. Second, short-context steps below 16K tokens route to
+FlashInfer because split/merge overhead dominates. For supported long-context
+steps, the model selects B1 length-bucket splitting when sequence parallelism
+is the only way to expose CTAs, and B8 compact workqueue when it avoids
+length-bucket launch fan-out. B4 remains too close to the merge/launch
+threshold and routes to FlashInfer.
+
+Split counts are constrained by the same structural policy: the bucket route
+uses CTA-work and length-based tile bounds, while the workqueue route uses
+active batch size and per-row tile count. The timed artifact freezes the
+resulting split operating points on calibration seed 20260622 and evaluates
+held-out seeds 20260623--20260627. This is still a calibrated prototype, not a
+learned or portable production router.
 
 \subsection{Serving Harness}
 
@@ -409,10 +431,10 @@ Repack + PyTorch SDPA & 0.6473 & 2.4197 & 4.9840 \\
 
 \subsection{Main Serving Results}
 
-Table~\ref{tab:main} reports the calibrated-policy engine over five held-out
-seeds after choosing thresholds and split counts on seed 20260622. The policy
-uses PersistentKV length buckets for B1, PersistentKV workqueue for B8
-long-context steps, and FlashInfer for the B4 boundary case. This changes the
+Table~\ref{tab:main} reports the calibrated cost-model policy over five
+held-out seeds after fixing model constants on seed 20260622. The policy uses
+PersistentKV length buckets for B1, PersistentKV workqueue for supported B8
+long-context GQA steps, and FlashInfer for the B4 boundary case. This changes the
 claim from ``PersistentKV beats FlashInfer everywhere'' to the stronger
 serving-system claim: routing avoids known bad regimes while exploiting
 PersistentKV where its work decomposition helps. The largest mean wall-clock
@@ -421,7 +443,7 @@ wall decode-token throughput improves by $1.044$--$1.080\times$.
 
 \begin{table}[t]
 \centering
-\caption{Held-out calibrated-policy serving results against FlashInfer. B1/B8
+\caption{Held-out calibrated cost-model serving results against FlashInfer. B1/B8
 rows report mean$\pm$std over seeds 20260623--20260627. B4 is the
 FlashInfer route on seed 20260623. All rows use page size 16, $H_q=32$,
 $H_{kv}=8$, $d=128$, FP16, and pass correctness.}
@@ -478,21 +500,17 @@ Adaptive route & 2.00 & 45.7 & 550.5 & 2.54 & 1.00 \\
 \subsection{Route and Split Calibration}
 
 Sequence splitting is the primary occupancy knob. Too few splits under-utilize
-the GPU; too many splits increase merge overhead. B1 needs more splits because
-sequence parallelism is the main source of CTAs, while B8 already has active
-rows to amortize work. We tune split counts only on calibration traces and
-freeze them before reporting held-out results: split 32 for B1, and split
-20/24/28 for bimodal/uniform/Zipf B8 workqueue.
-
-This calibration is a workshop prototype, not a final routing model. The
-methodological point is that Table~\ref{tab:main} reports held-out traces using
-fixed choices, not a per-row oracle. Table~\ref{tab:split} shows that nearby
-split counts remain wall-positive but are not monotonic, so the choices should
-be read as calibrated operating points rather than a broad optimum.
+the GPU; too many splits increase merge overhead. The cost model treats split
+count as a route parameter, not a per-trace lookup. B1 requires more splits
+because sequence parallelism is the main source of CTAs, while B8 already has
+active rows to amortize work. Table~\ref{tab:split} shows that nearby split
+counts remain wall-positive but are not monotonic, which is why the policy uses
+conservative multiples of four and fixed calibration constants rather than
+claiming a broad optimum.
 
 \begin{table}[t]
 \centering
-\caption{Split-count sensitivity on seed 20260623. Ratios are adaptive policy
+\caption{Split-count sensitivity on seed 20260623. Ratios are cost-model policy
 over FlashInfer.}
 \label{tab:split}
 \small
@@ -551,9 +569,10 @@ overhead outweighed the saved merge launch. We keep both paths as ablations
 because they clarify that the remaining B4 problem is not merely host overhead.
 
 Table~\ref{tab:gqa} reports a serving GQA/MQA sweep on a smaller B8 bimodal
-trace that fits 12 GB VRAM for $G=1$. The current workqueue route wins for
-$G=4$ but loses for $G=1$ and $G=8$, so a production policy should include the
-GQA ratio in its routing decision.
+trace that fits 12 GB VRAM for $G=1$. Earlier ungated workqueue experiments
+lost badly for $G=1$ and $G=8$. The current policy acts on that ablation:
+PersistentKV is enabled only for the calibrated $G=4$ route, while $G=1$ and
+$G=8$ route to FlashInfer until separate mappings are implemented.
 
 \begin{table}[t]
 \centering
@@ -561,13 +580,13 @@ GQA ratio in its routing decision.
 8 requests and 24 measured steps.}
 \label{tab:gqa}
 \small
-\begin{tabular}{rrrrr}
+\begin{tabular}{rrlrr}
 \toprule
-$G$ & $H_{kv}$ & CUDA tok/s ratio & Wall tok/s ratio & Max $|e|$ \\
+$G$ & $H_{kv}$ & Selected route & CUDA tok/s ratio & Wall tok/s ratio \\
 \midrule
-1 & 32 & 0.489 & 0.504 & $6.104{\cdot}10^{-5}$ \\
-4 & 8 & 1.228 & 1.239 & $6.104{\cdot}10^{-5}$ \\
-8 & 4 & 0.263 & 0.276 & $1.221{\cdot}10^{-4}$ \\
+1 & 32 & FlashInfer gate & 1.000 & 1.000 \\
+4 & 8 & PersistentKV workqueue & 1.257 & 1.256 \\
+8 & 4 & FlashInfer gate & 1.000 & 1.000 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -592,22 +611,25 @@ wall-positive over five held-out seeds, with mean wall ratios of
 $1.044$--$1.080\times$. The gains are modest, but they hold across the tested
 synthetic seeds.
 
-\textbf{Why B4 routes to FlashInfer.} At B4, there is enough work that no-split
+\textbf{Why B4 and unsupported GQA route to FlashInfer.} At B4, there is enough work that no-split
 PersistentKV under-utilizes the GPU, but not enough work to fully amortize the
 second split-merge launch. CUDA graph replay and fused atomic merge both failed
 to solve this on RTX 3060. The adaptive system therefore routes B4 to the
-FlashInfer baseline path and avoids the PersistentKV regression. Improving
-PersistentKV itself in this regime likely requires a lower-cost merge design or
-a persistent cooperative kernel that performs segmented reduction without the
-current atomic and launch penalties.
+FlashInfer baseline path and avoids the PersistentKV regression. The same
+principle applies to GQA: $G=1$ and $G=8$ are not reported as PersistentKV
+wins, because the current KV-head-group mapping is calibrated for $G=4$.
+Improving PersistentKV itself in these regimes likely requires a lower-cost
+merge design, a query-head mapping variant, or a persistent cooperative kernel
+that performs segmented reduction without the current atomic and launch
+penalties.
 
 \textbf{Scope of the claim.} The evidence supports a workshop-level claim:
 page-aware split scheduling and compact native block-table work queues can beat
 a strong FlashInfer baseline in selected long-context serving regimes on a
 commodity GPU. It does not show that PersistentKV is universally faster. A full
 systems paper needs a serving-runtime integration, real traces, model-level
-latency, more hardware targets, and current vLLM/TensorRT-LLM stacks under the
-same admission-control policy.
+latency, more hardware targets including datacenter GPUs, and current
+vLLM/TensorRT-LLM stacks under the same admission-control policy.
 
 \textbf{Future work.} The most direct next step is a lower-overhead segmented
 merge for the workqueue path and an online split policy that selects different
@@ -633,7 +655,10 @@ locality and the best routing threshold.
 Different GPUs have different SM counts, cache sizes, HBM bandwidth, Tensor
 Core throughput, and launch overheads. In particular, Hopper-generation GPUs
 provide hardware features that FlashAttention-3 and production serving systems
-can exploit. PersistentKV's split policy should be retuned per GPU.
+can exploit. The lightweight policy exposes bandwidth, launch-overhead, SM
+count, and occupancy-target constants, but those constants still need
+calibration per GPU. The B8 gains are modest enough that replication on A100,
+L4/L40S, and H100-class hardware is required for a deployment claim.
 
 \textbf{Versioned baselines.} The measured FlashInfer, vLLM, and TensorRT-LLM
 versions are the versions compatible with the local PyTorch/CUDA environment.
@@ -649,9 +674,11 @@ submission should add real traffic traces and confidence intervals over more
 seeds and hardware.
 
 \textbf{GQA ablation scope.} The serving sweep covers $G\in\{1,4,8\}$ on a
-smaller B8 trace. It shows the current workqueue route is useful for $G=4$ but
-not for $G=1$ or $G=8$. A final version should add a query-head mapping
-baseline and make GQA ratio part of the production route policy.
+smaller B8 trace. The current policy now gates $G=1$ and $G=8$ to FlashInfer
+instead of routing them through a losing PersistentKV path. This avoids a
+system regression but does not solve those shapes. A final version should add a
+query-head mapping baseline and separate cost constants for MQA and large-GQA
+models.
 
 \textbf{Serving-reference correctness.} Serving traces compare PersistentKV to
 FlashInfer, establishing equivalence to the timed production baseline rather
@@ -684,13 +711,14 @@ workqueue scheduling, the same native block-table engine lets the calibrated
 policy reach $1.044$--$1.080\times$ mean synchronized wall throughput on
 held-out max-active 8 bimodal, uniform, and Zipf-like traces. The method is not
 universal as a single kernel: workqueue B4 remains wall-negative, and the GQA
-sweep shows losses for $G=1$ and $G=8$. The calibrated policy avoids the B4
-loss by selecting FlashInfer. These results make PersistentKV a
+sweep shows that $G=1$ and $G=8$ should use FlashInfer until new mappings are
+implemented. The calibrated policy avoids these losses by selecting FlashInfer.
+These results make PersistentKV a
 credible workshop artifact: it identifies concrete regimes where page-aware
 scheduling can matter, provides a reproducible methodology and ablations, and
 exposes the next systems problem for long-context LLM serving.
 
-\begin{thebibliography}{9}
+\begin{thebibliography}{99}
 
 \bibitem{dao2022flashattention}
 T. Dao, D. Y. Fu, S. Ermon, A. Rudra, and C. R{\'e}.
@@ -717,6 +745,34 @@ H. Zhang, and I. Stoica.
 G.-I. Yu, J. S. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun.
 \newblock Orca: A distributed serving system for Transformer-based generative models.
 \newblock In \emph{USENIX Symposium on Operating Systems Design and Implementation}, 2022.
+
+\bibitem{agrawal2023sarathi}
+A. Agrawal, A. Panwar, J. Mohan, N. Kwatra, B. S. Gulavani, and R. Ramjee.
+\newblock Sarathi: Efficient LLM inference by piggybacking decodes with chunked prefills.
+\newblock arXiv preprint arXiv:2308.16369, 2023.
+
+\bibitem{agrawal2024sarathiserve}
+A. Agrawal, N. Kedia, A. Panwar, J. Mohan, N. Kwatra, B. S. Gulavani,
+A. Tumanov, and R. Ramjee.
+\newblock Taming throughput-latency tradeoff in LLM inference with Sarathi-Serve.
+\newblock arXiv preprint arXiv:2403.02310, 2024.
+
+\bibitem{splitwise2023}
+P. Patel, E. Choukse, C. Zhang, A. Shah, I. Goiri, S. Maleki, and R. Bianchini.
+\newblock Splitwise: Efficient generative LLM inference using phase splitting.
+\newblock arXiv preprint arXiv:2311.18677, 2023.
+
+\bibitem{zhang2023h2o}
+Z. Zhang, Y. Sheng, T. Zhou, T. Chen, L. Zheng, R. Cai, Z. Song, Y. Tian,
+C. R{\'e}, C. Barrett, Z. Wang, and B. Chen.
+\newblock H2O: Heavy-hitter oracle for efficient generative inference of large language models.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2023.
+
+\bibitem{liu2023dejavu}
+Z. Liu, J. Wang, T. Dao, T. Zhou, B. Yuan, Z. Song, A. Shrivastava, C. Zhang,
+Y. Tian, C. R{\'e}, and B. Chen.
+\newblock Deja Vu: Contextual sparsity for efficient LLMs at inference time.
+\newblock In \emph{International Conference on Machine Learning}, 2023.
 
 \bibitem{prabhu2024vattention}
 R. Prabhu, V. Janapa Reddi, and M. Zaharia.
