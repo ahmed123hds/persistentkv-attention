@@ -272,7 +272,10 @@ where $\beta$ is measured streaming read bandwidth, $C_r$ is estimated decode
 CTA work per SM for route $r$, $C_{\min}$ is a minimum occupancy target,
 $L_r$ is launch count, and $\lambda$ is a calibrated launch-overhead constant.
 Candidate routes are FlashInfer, PersistentKV length buckets, and PersistentKV
-compact workqueue.
+compact workqueue. In the reported RTX 3060 artifact, $\beta=302$ GB/s,
+$C_{\min}=4$ CTAs/SM, and $\lambda=8\,\mu$s. These constants are calibrated
+system parameters, not derived hardware invariants; a different GPU should
+re-fit them before using the route policy.
 
 The model has two hard eligibility gates. First, PersistentKV is enabled only
 for the calibrated $G=4$ KV-head-group mapping; uncalibrated $G=1$ and $G=8$
@@ -308,6 +311,11 @@ split tasks. All reported comparisons use:
   \item CUDA-event timing for queued GPU work and synchronized wall timing for
   end-to-end step latency including Python-side planning and tensor setup.
 \end{itemize}
+The harness also accepts external CSV or JSON request traces with
+\texttt{prompt\_len}, \texttt{decode\_len}, and optional arrival-step fields.
+The results in this paper use synthetic traces only; the trace-file interface
+is included to make real-traffic replication possible without changing the
+benchmark code.
 
 \subsection{Page-Table Generation}
 
@@ -493,13 +501,14 @@ Adaptive route & 2.00 & 45.7 & 550.5 & 2.54 & 1.00 \\
 \end{table}
 
 Table~\ref{tab:nsight} reports a permissioned Nsight Compute capture on a short
-B8 bimodal $G=4$ trace. The profiler replays instrumented kernels, so these
-numbers are hardware-counter evidence rather than the source of wall-clock
-speedups. PersistentKV decode reaches higher SM and memory-throughput
-utilization than the profiled FlashInfer decode invocation, supporting the
-claim that page-aware work decomposition exposes more useful device work. The
-merge kernel is short but memory-heavy, matching the launch/merge overhead
-concern in the B4 boundary case.
+B8 bimodal $G=4$ trace, not on the full five-seed suite in
+Table~\ref{tab:main}. The profiler replays instrumented kernels, so these
+numbers are hardware-counter evidence under a matched short-trace setup rather
+than the source of wall-clock speedups. PersistentKV decode reaches higher SM
+and memory-throughput utilization than the profiled FlashInfer decode
+invocation, supporting the claim that page-aware work decomposition exposes
+more useful device work. The merge kernel is short but memory-heavy, matching
+the launch/merge overhead concern in the B4 boundary case.
 
 \begin{table}[t]
 \centering
@@ -513,6 +522,26 @@ Kernel & Time ms & SM thr. & Mem. thr. & DRAM GB/s & L2 hit \\
 FlashInfer decode & 2.271 & 9.55 & 62.72 & 219.2 & 0.12 \\
 PersistentKV decode & 1.263 & 17.21 & 74.48 & 200.8 & 0.44 \\
 PersistentKV merge & 0.014 & 32.72 & 62.02 & 223.5 & 8.98 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Evidence and coverage map for the current artifact.}
+\label{tab:coverage}
+\small
+\begin{tabular}{llll}
+\toprule
+Regime / claim & Current route & Evidence & Status \\
+\midrule
+B1 long context, $G=4$ & PersistentKV bucket & 5 seeds & Positive \\
+B8 long context, $G=4$ & PersistentKV workqueue & 5 seeds + Nsight short trace & Modest positive \\
+B4 boundary, $G=4$ & FlashInfer & boundary run + failed ablations & Routed around \\
+$G=1$ / $G=8$ B8 & FlashInfer gate & GQA sweep & Routed around \\
+Model-level latency & -- & not measured & Open \\
+Real traffic traces & trace-file support & no redistributed trace & Open \\
+Non-RTX GPUs & -- & not measured & Open \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -650,6 +679,8 @@ commodity GPU. It does not show that PersistentKV is universally faster. A full
 systems paper needs a serving-runtime integration, real traces, model-level
 latency, more hardware targets including datacenter GPUs, and current
 vLLM/TensorRT-LLM stacks under the same admission-control policy.
+Table~\ref{tab:coverage} summarizes which regimes are positive results and
+which are explicitly routed around or open.
 
 \textbf{Future work.} The most direct next step is a lower-overhead segmented
 merge for the workqueue path and an online split policy that selects different
@@ -663,7 +694,9 @@ paged decode.
 \textbf{Synthetic traces.} The traces isolate scheduling properties, but omit
 admission control, prefill/decode interference, tokenizer latency, network
 queues, memory pressure, and model-layer interactions. The results should be
-viewed as a controlled kernel-scheduler study.
+viewed as a controlled kernel-scheduler study. The artifact now accepts
+external CSV/JSON request traces, but this paper does not redistribute or
+evaluate a production trace.
 
 \textbf{Synthetic page allocation.} The generated block tables use seeded
 random physical-page IDs and optional holes, so methods see identical
@@ -690,8 +723,8 @@ correctness tolerance.
 \textbf{Held-out seed count.} The main rows now use one calibration seed and
 five held-out seeds. This is a stronger check than a single held-out seed, but
 the traces are still synthetic and the B8 speedups are modest. A stronger
-submission should add real traffic traces and confidence intervals over more
-seeds and hardware.
+submission should add real traffic traces, confidence intervals over more seeds
+and hardware, and a pre-registered route policy before evaluation.
 
 \textbf{GQA ablation scope.} The serving sweep covers $G\in\{1,4,8\}$ on a
 smaller B8 trace. The current policy now gates $G=1$ and $G=8$ to FlashInfer
@@ -714,8 +747,9 @@ serving runtime and report request-level latency distributions.
 
 \textbf{Hardware profiling scope.} A permissioned Nsight Compute capture is now
 included for a short B8 $G=4$ trace. This improves the causal evidence, but it
-is not a full profiling campaign: the main five-seed rows are still timed
-without Nsight replay, and datacenter GPUs should be profiled separately.
+is not a full profiling campaign: the capture is not the full five-seed suite,
+the main rows are still timed without Nsight replay, and datacenter GPUs should
+be profiled separately.
 
 \section{Conclusion}
 

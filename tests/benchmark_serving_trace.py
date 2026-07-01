@@ -10,7 +10,9 @@ native block-table engine once per length bucket.
 from __future__ import annotations
 
 import argparse
+import csv
 import gc
+import json
 import math
 import os
 import statistics
@@ -48,6 +50,13 @@ class Request:
     prompt_len: int
     decode_len: int
     physical_pages: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class TraceRequestSpec:
+    arrival: int
+    prompt_len: int
+    decode_len: int
 
 
 @dataclass(frozen=True)
@@ -186,6 +195,40 @@ def make_lengths(trace: str, requests: int, seed: int) -> list[tuple[int, int]]:
     return result
 
 
+def load_trace_specs(path: Path, limit: int) -> list[TraceRequestSpec]:
+    if path.suffix.lower() == ".json":
+        raw = json.loads(path.read_text())
+        if not isinstance(raw, list):
+            raise ValueError("--trace-file JSON must contain a list of request objects")
+        rows = raw
+    else:
+        with path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+
+    specs: list[TraceRequestSpec] = []
+    for index, row in enumerate(rows[:limit]):
+        try:
+            prompt = int(row.get("prompt_len", row.get("prompt", "")))
+            decode = int(row.get("decode_len", row.get("decode", "")))
+        except ValueError as error:
+            raise ValueError(
+                "trace-file rows must define integer prompt_len/prompt and "
+                "decode_len/decode fields"
+            ) from error
+        arrival_raw = row.get("arrival", row.get("arrival_step", index))
+        arrival = int(arrival_raw)
+        specs.append(
+            TraceRequestSpec(
+                arrival=arrival,
+                prompt_len=rounded_length(prompt),
+                decode_len=decode,
+            )
+        )
+    if not specs:
+        raise ValueError(f"trace file produced no requests: {path}")
+    return specs
+
+
 def build_requests(
     trace: str,
     requests: int,
@@ -193,11 +236,23 @@ def build_requests(
     seed: int,
     hole_fraction: float,
     bucket_tokens: int,
+    trace_file: Path | None,
 ) -> tuple[list[Request], int]:
-    lengths = make_lengths(trace, requests, seed)
+    trace_specs = (
+        load_trace_specs(trace_file, requests)
+        if trace_file is not None
+        else [
+            TraceRequestSpec(
+                arrival=index // max_active,
+                prompt_len=prompt,
+                decode_len=decode,
+            )
+            for index, (prompt, decode) in enumerate(make_lengths(trace, requests, seed))
+        ]
+    )
     logical_pages = []
-    for prompt, decode in lengths:
-        exact_length = prompt + decode
+    for spec in trace_specs:
+        exact_length = spec.prompt_len + spec.decode_len
         if bucket_tokens > 0:
             reserved_length = rounded_length(
                 ((exact_length + bucket_tokens - 1) // bucket_tokens)
@@ -212,11 +267,18 @@ def build_requests(
 
     built: list[Request] = []
     cursor = 0
-    for request_id, ((prompt, decode), pages) in enumerate(zip(lengths, logical_pages)):
-        arrival = request_id // max_active
+    for request_id, (spec, pages) in enumerate(zip(trace_specs, logical_pages)):
         assigned = tuple(int(x) for x in physical_ids[cursor: cursor + pages].tolist())
         cursor += pages
-        built.append(Request(request_id, arrival, prompt, decode, assigned))
+        built.append(
+            Request(
+                request_id,
+                spec.arrival,
+                spec.prompt_len,
+                spec.decode_len,
+                assigned,
+            )
+        )
     return built, physical_pages
 
 
@@ -1057,6 +1119,15 @@ def main() -> None:
         default="bimodal",
     )
     parser.add_argument("--requests", type=int, default=24)
+    parser.add_argument(
+        "--trace-file",
+        type=Path,
+        default=None,
+        help=(
+            "optional CSV/JSON request trace with prompt_len/prompt, "
+            "decode_len/decode, and optional arrival/arrival_step fields"
+        ),
+    )
     parser.add_argument("--max-active", type=int, default=8)
     parser.add_argument("--steps", type=int, default=48)
     parser.add_argument("--hole-fraction", type=float, default=0.50)
@@ -1153,6 +1224,7 @@ def main() -> None:
         args.seed,
         args.hole_fraction,
         args.bucket_tokens,
+        args.trace_file,
     )
     steps = build_steps(requests, args.max_active)[:args.steps]
     if not steps:
@@ -1483,7 +1555,7 @@ def main() -> None:
     lines = [
         "Serving trace experiment",
         f"torch={torch.__version__} cuda={torch.version.cuda} gpu={torch.cuda.get_device_name(0)}",
-        f"trace={args.trace} requests={args.requests} max_active={args.max_active} measured_steps={len(steps)} repeats={args.repeats}",
+        f"trace={args.trace} trace_file={args.trace_file if args.trace_file is not None else 'none'} requests={len(requests)} max_active={args.max_active} measured_steps={len(steps)} repeats={args.repeats}",
         f"B active mean={statistics.mean(active_counts):.2f} max={max(active_counts)} exact_length_buckets mean={statistics.mean(unique_lengths):.2f} max={max(unique_lengths)}",
         f"PersistentKV bucket_tokens={args.bucket_tokens} route_buckets mean={statistics.mean(route_bucket_counts):.2f} max={max(route_bucket_counts)}",
         f"PersistentKV indexed_qo={args.pkv_indexed}",

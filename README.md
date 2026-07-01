@@ -198,6 +198,26 @@ This emits logs under `results/review_ablations/` for:
 - a serving GQA/MQA sweep for `G=1,4,8`, where unsupported PersistentKV GQA
   ratios route to FlashInfer.
 
+## External Request Traces
+
+The serving harness can also consume an external CSV or JSON request trace:
+
+```bash
+"$PYTHON_BIN" tests/benchmark_serving_trace.py \
+  --trace bimodal \
+  --trace-file path/to/trace.csv \
+  --requests 1000 \
+  --max-active 8 \
+  --steps 128 \
+  --precompute-metadata \
+  --adaptive-engine
+```
+
+CSV rows should define `prompt_len` or `prompt`, `decode_len` or `decode`, and
+optionally `arrival` or `arrival_step`. JSON traces should be a list of objects
+with the same fields. The paper still reports synthetic traces only because no
+production trace is redistributed with this artifact.
+
 ## Nsight Compute Profile
 
 The artifact includes a short permissioned Nsight Compute profile under
