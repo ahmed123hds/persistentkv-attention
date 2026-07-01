@@ -470,19 +470,14 @@ planning and Python metadata work. We therefore use wall timing as the
 serving-facing number and CUDA events as a diagnostic.
 
 Table~\ref{tab:causal} reports scheduler-derived workload counters for the
-held-out bimodal B8 run. Nsight Compute hardware counters for SM occupancy,
-DRAM bytes, and L2 hit rate were unavailable in the local environment because
-NVIDIA performance counters were permission-restricted. We therefore avoid
-claiming achieved occupancy or cache behavior. The scheduling mechanism is
-still visible: exact length buckets require 16.00 CUDA launches per decode step,
-while the compact workqueue requires 2.00. The workqueue also reduces
-merge-state traffic from 4.06 MB/step to 2.54 MB/step and merge launches from
-8.00 to 1.00.
+held-out bimodal B8 run. The scheduling mechanism is visible: exact length
+buckets require 16.00 CUDA launches per decode step, while the compact
+workqueue requires 2.00. The workqueue also reduces merge-state traffic from
+4.06 MB/step to 2.54 MB/step and merge launches from 8.00 to 1.00.
 
 \begin{table}[t]
 \centering
-\caption{Scheduler-derived structural counters for held-out bimodal B8
-(hardware counters unavailable).}
+\caption{Scheduler-derived structural counters for held-out bimodal B8.}
 \label{tab:causal}
 \small
 \begin{tabular}{lrrrrr}
@@ -493,6 +488,31 @@ FlashInfer & 1.00 & -- & 550.5 & 0.00 & 0.00 \\
 PersistentKV buckets & 16.00 & 73.1 & 550.5 & 4.06 & 8.00 \\
 PersistentKV workqueue & 2.00 & 45.7 & 550.5 & 2.54 & 1.00 \\
 Adaptive route & 2.00 & 45.7 & 550.5 & 2.54 & 1.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:nsight} reports a permissioned Nsight Compute capture on a short
+B8 bimodal $G=4$ trace. The profiler replays instrumented kernels, so these
+numbers are hardware-counter evidence rather than the source of wall-clock
+speedups. PersistentKV decode reaches higher SM and memory-throughput
+utilization than the profiled FlashInfer decode invocation, supporting the
+claim that page-aware work decomposition exposes more useful device work. The
+merge kernel is short but memory-heavy, matching the launch/merge overhead
+concern in the B4 boundary case.
+
+\begin{table}[t]
+\centering
+\caption{Nsight Compute hardware counters on a short B8 bimodal $G=4$ trace.}
+\label{tab:nsight}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Kernel & Time ms & SM thr. & Mem. thr. & DRAM GB/s & L2 hit \\
+\midrule
+FlashInfer decode & 2.271 & 9.55 & 62.72 & 219.2 & 0.12 \\
+PersistentKV decode & 1.263 & 17.21 & 74.48 & 200.8 & 0.44 \\
+PersistentKV merge & 0.014 & 32.72 & 62.02 & 223.5 & 8.98 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -692,12 +712,10 @@ networking, CPU request queues, or KV-cache allocation policies beyond synthetic
 page assignment. A production result should integrate PersistentKV into a full
 serving runtime and report request-level latency distributions.
 
-\textbf{Hardware profiling permissions.} Nsight Compute was available in the
-environment, but GPU performance counters were blocked by
-\texttt{ERR\_NVGPUCTRPERM}. We therefore report scheduler-derived structural
-counters from the harness rather than hardware L2 hit rate, DRAM byte, and
-achieved occupancy counters. A final submission should rerun the same
-experiments on a machine with NVIDIA performance counters enabled.
+\textbf{Hardware profiling scope.} A permissioned Nsight Compute capture is now
+included for a short B8 $G=4$ trace. This improves the causal evidence, but it
+is not a full profiling campaign: the main five-seed rows are still timed
+without Nsight replay, and datacenter GPUs should be profiled separately.
 
 \section{Conclusion}
 

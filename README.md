@@ -198,6 +198,13 @@ This emits logs under `results/review_ablations/` for:
 - a serving GQA/MQA sweep for `G=1,4,8`, where unsupported PersistentKV GQA
   ratios route to FlashInfer.
 
+## Nsight Compute Profile
+
+The artifact includes a short permissioned Nsight Compute profile under
+`results/nsight/`. See `results/nsight/summary.md` for the exact command shape
+and hardware-counter table. Nsight replay distorts wall timing, so those logs
+are profiling evidence only; use the normal ablation logs for speed ratios.
+
 ## Native-Paged Baseline Table
 
 The isolated baseline harness expects optional local baseline artifacts:
